@@ -534,7 +534,7 @@ ide_xml_parser_characters_sax_cb (ParserState    *state,
 }
 
 static void
-ide_xml_parser_get_analysis_worker (GTask        *task,
+ide_xml_parser_get_analysis_worker (IdeTask      *task,
                                     gpointer      source_object,
                                     gpointer      task_data,
                                     GCancellable *cancellable)
@@ -549,11 +549,11 @@ ide_xml_parser_get_analysis_worker (GTask        *task,
   gsize doc_size;
 
   g_assert (IDE_IS_XML_PARSER (self));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
   g_assert (state != NULL);
   g_assert (cancellable == NULL || G_IS_CANCELLABLE (cancellable));
 
-  if (g_task_return_error_if_cancelled (task))
+  if (ide_task_return_error_if_cancelled (task))
     return;
 
   doc_data = g_bytes_get_data (state->content, &doc_size);
@@ -573,10 +573,10 @@ ide_xml_parser_get_analysis_worker (GTask        *task,
   analysis = g_steal_pointer (&state->analysis);
   if (analysis == NULL)
     {
-      g_task_return_new_error (task,
-                               G_IO_ERROR,
-                               G_IO_ERROR_FAILED,
-                               _("Failed to create the XML tree."));
+      ide_task_return_new_error (task,
+                                 G_IO_ERROR,
+                                 G_IO_ERROR_FAILED,
+                                 _("Failed to create the XML tree."));
       return;
     }
 
@@ -596,7 +596,7 @@ ide_xml_parser_get_analysis_worker (GTask        *task,
     ide_xml_analysis_set_schemas (analysis, g_steal_pointer (&state->schemas));
 
   ide_xml_analysis_set_sequence (analysis, state->sequence);
-  g_task_return_pointer (task, analysis, (GDestroyNotify)ide_xml_analysis_unref);
+  ide_task_return_pointer (task, analysis, (GDestroyNotify)ide_xml_analysis_unref);
 }
 
 void
@@ -608,14 +608,14 @@ ide_xml_parser_get_analysis_async (IdeXmlParser        *self,
                                    GAsyncReadyCallback  callback,
                                    gpointer             user_data)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr(IdeTask) task = NULL;
   ParserState *state;
 
   g_return_if_fail (IDE_IS_XML_PARSER (self));
   g_return_if_fail (!cancellable || G_IS_CANCELLABLE (cancellable));
 
-  task = g_task_new (self, cancellable, callback, user_data);
-  g_task_set_source_tag (task, ide_xml_parser_get_analysis_async);
+  task = ide_task_new (self, cancellable, callback, user_data);
+  ide_task_set_source_tag (task, ide_xml_parser_get_analysis_async);
 
   state = g_slice_new0 (ParserState);
   state->self = self;
@@ -634,8 +634,8 @@ ide_xml_parser_get_analysis_async (IdeXmlParser        *self,
   state->parent_node = state->root_node;
   ide_xml_stack_push (self->stack, "root", state->root_node, NULL, 0);
 
-  g_task_set_task_data (task, state, (GDestroyNotify)parser_state_free);
-  g_task_run_in_thread (task, ide_xml_parser_get_analysis_worker);
+  ide_task_set_task_data (task, state, (GDestroyNotify)parser_state_free);
+  ide_task_run_in_thread (task, ide_xml_parser_get_analysis_worker);
 }
 
 IdeXmlAnalysis *
@@ -644,9 +644,9 @@ ide_xml_parser_get_analysis_finish (IdeXmlParser  *self,
                                     GError       **error)
 {
   g_return_val_if_fail (IDE_IS_XML_PARSER (self), NULL);
-  g_return_val_if_fail (G_IS_TASK (result), NULL);
+  g_return_val_if_fail (IDE_IS_TASK (result), NULL);
 
-  return g_task_propagate_pointer (G_TASK (result), error);
+  return ide_task_propagate_pointer (IDE_TASK (result), error);
 }
 
 gchar *
