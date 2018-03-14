@@ -38,6 +38,7 @@
 #include "runtimes/ide-runtime.h"
 #include "runtimes/ide-runtime-manager.h"
 #include "runtimes/ide-runtime-private.h"
+#include "threading/ide-task.h"
 
 /**
  * SECTION:ide-build-manager
@@ -325,7 +326,7 @@ ide_build_manager_ensure_runtime_cb (GObject      *object,
 {
   IdeRuntimeManager *runtime_manager = (IdeRuntimeManager *)object;
   g_autoptr(GError) error = NULL;
-  g_autoptr(GTask) task = user_data;
+  g_autoptr(IdeTask) task = user_data;
   IdeBuildPipeline *pipeline;
   IdeBuildManager *self;
   GCancellable *cancellable;
@@ -334,10 +335,10 @@ ide_build_manager_ensure_runtime_cb (GObject      *object,
 
   g_assert (IDE_IS_RUNTIME_MANAGER (runtime_manager));
   g_assert (G_IS_ASYNC_RESULT (result));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
 
-  self = g_task_get_source_object (task);
-  pipeline = g_task_get_task_data (task);
+  self = ide_task_get_source_object (task);
+  pipeline = ide_task_get_task_data (task);
 
   g_assert (IDE_IS_BUILD_MANAGER (self));
   g_assert (IDE_IS_BUILD_PIPELINE (pipeline));
@@ -354,10 +355,10 @@ ide_build_manager_ensure_runtime_cb (GObject      *object,
       IDE_GOTO (failure);
     }
 
-  if (g_task_return_error_if_cancelled (task))
+  if (ide_task_return_error_if_cancelled (task))
     IDE_GOTO (failure);
 
-  cancellable = g_task_get_cancellable (task);
+  cancellable = ide_task_get_cancellable (task);
 
   /* This will cause plugins to load on the pipeline. */
   if (!g_initable_init (G_INITABLE (pipeline), cancellable, &error))
@@ -373,19 +374,19 @@ ide_build_manager_ensure_runtime_cb (GObject      *object,
 
   g_object_notify_by_pspec (G_OBJECT (self), properties [PROP_PIPELINE]);
 
-  g_task_return_boolean (task, TRUE);
+  ide_task_return_boolean (task, TRUE);
 
   IDE_EXIT;
 
 failure:
 
   if (error != NULL)
-    g_task_return_error (task, g_steal_pointer (&error));
+    ide_task_return_error (task, g_steal_pointer (&error));
   else
-    g_task_return_new_error (task,
-                             G_IO_ERROR,
-                             G_IO_ERROR_FAILED,
-                             "Failed to setup build pipeline");
+    ide_task_return_new_error (task,
+                               G_IO_ERROR,
+                               G_IO_ERROR_FAILED,
+                               "Failed to setup build pipeline");
 
   IDE_EXIT;
 }
@@ -398,7 +399,7 @@ ide_build_manager_device_get_info_cb (GObject      *object,
   IdeDevice *device = (IdeDevice *)object;
   g_autoptr(IdeDeviceInfo) info = NULL;
   g_autoptr(GError) error = NULL;
-  g_autoptr(GTask) task = user_data;
+  g_autoptr(IdeTask) task = user_data;
   IdeRuntimeManager *runtime_manager;
   IdeBuildPipeline *pipeline;
   IdeContext *context;
@@ -407,9 +408,9 @@ ide_build_manager_device_get_info_cb (GObject      *object,
 
   g_assert (IDE_IS_DEVICE (device));
   g_assert (G_IS_ASYNC_RESULT (result));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
 
-  pipeline = g_task_get_task_data (task);
+  pipeline = ide_task_get_task_data (task);
   g_assert (IDE_IS_BUILD_PIPELINE (pipeline));
 
   context = ide_object_get_context (IDE_OBJECT (pipeline));
@@ -423,7 +424,7 @@ ide_build_manager_device_get_info_cb (GObject      *object,
       ide_context_warning (context,
                            _("Failed to get device information: %s"),
                            error->message);
-      g_task_return_error (task, g_steal_pointer (&error));
+      ide_task_return_error (task, g_steal_pointer (&error));
       IDE_EXIT;
     }
 
@@ -431,7 +432,7 @@ ide_build_manager_device_get_info_cb (GObject      *object,
 
   _ide_runtime_manager_prepare_async (runtime_manager,
                                       pipeline,
-                                      g_task_get_cancellable (task),
+                                      ide_task_get_cancellable (task),
                                       ide_build_manager_ensure_runtime_cb,
                                       g_object_ref (task));
 
@@ -441,7 +442,7 @@ ide_build_manager_device_get_info_cb (GObject      *object,
 static void
 ide_build_manager_invalidate_pipeline (IdeBuildManager *self)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr(IdeTask) task = NULL;
   IdeConfigurationManager *config_manager;
   IdeDeviceManager *device_manager;
   IdeConfiguration *config;
@@ -512,9 +513,9 @@ ide_build_manager_invalidate_pipeline (IdeBuildManager *self)
   /*
    * Create a task to manage our async pipeline initialization state.
    */
-  task = g_task_new (self, self->cancellable, NULL, NULL);
-  g_task_set_task_data (task, g_object_ref (self->pipeline), g_object_unref);
-  g_task_set_priority (task, G_PRIORITY_LOW);
+  task = ide_task_new (self, self->cancellable, NULL, NULL);
+  ide_task_set_task_data (task, g_object_ref (self->pipeline), g_object_unref);
+  ide_task_set_priority (task, G_PRIORITY_LOW);
 
   /*
    * Next, we need to get information on the build device, which may require
@@ -1188,26 +1189,26 @@ ide_build_manager_execute_cb (GObject      *object,
 {
   IdeBuildPipeline *pipeline = (IdeBuildPipeline *)object;
   IdeBuildManager *self;
-  g_autoptr(GTask) task = user_data;
+  g_autoptr(IdeTask) task = user_data;
   g_autoptr(GError) error = NULL;
 
   IDE_ENTRY;
 
   g_assert (IDE_IS_BUILD_PIPELINE (pipeline));
   g_assert (G_IS_ASYNC_RESULT (result));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
 
-  self = g_task_get_source_object (task);
+  self = ide_task_get_source_object (task);
   g_assert (IDE_IS_BUILD_MANAGER (self));
 
   if (!ide_build_pipeline_execute_finish (pipeline, result, &error))
     {
       ide_object_warning (pipeline, "%s", error->message);
-      g_task_return_error (task, g_steal_pointer (&error));
+      ide_task_return_error (task, g_steal_pointer (&error));
       IDE_GOTO (failure);
     }
 
-  g_task_return_boolean (task, TRUE);
+  ide_task_return_boolean (task, TRUE);
 
 failure:
   IDE_EXIT;
@@ -1219,7 +1220,7 @@ ide_build_manager_save_all_cb (GObject      *object,
                                gpointer      user_data)
 {
   IdeBufferManager *buffer_manager = (IdeBufferManager *)object;
-  g_autoptr(GTask) task = user_data;
+  g_autoptr(IdeTask) task = user_data;
   g_autoptr(GError) error = NULL;
   IdeBuildManager *self;
   GCancellable *cancellable;
@@ -1227,17 +1228,17 @@ ide_build_manager_save_all_cb (GObject      *object,
   IDE_ENTRY;
 
   g_assert (IDE_IS_BUFFER_MANAGER (buffer_manager));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
 
-  self = g_task_get_source_object (task);
-  cancellable = g_task_get_cancellable (task);
+  self = ide_task_get_source_object (task);
+  cancellable = ide_task_get_cancellable (task);
 
   g_assert (IDE_IS_BUILD_MANAGER (self));
   g_assert (!cancellable || G_IS_CANCELLABLE (cancellable));
 
   if (!ide_buffer_manager_save_all_finish (buffer_manager, result, &error))
     {
-      g_task_return_error (task, g_steal_pointer (&error));
+      ide_task_return_error (task, g_steal_pointer (&error));
       IDE_EXIT;
     }
 
@@ -1275,7 +1276,7 @@ ide_build_manager_execute_async (IdeBuildManager     *self,
                                  GAsyncReadyCallback  callback,
                                  gpointer             user_data)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr(IdeTask) task = NULL;
   IdeBufferManager *buffer_manager;
   IdeContext *context;
 
@@ -1287,25 +1288,25 @@ ide_build_manager_execute_async (IdeBuildManager     *self,
 
   cancellable = dzl_cancellable_chain (cancellable, self->cancellable);
 
-  task = g_task_new (self, cancellable, callback, user_data);
-  g_task_set_source_tag (task, ide_build_manager_execute_async);
-  g_task_set_priority (task, G_PRIORITY_LOW);
-  g_task_set_return_on_cancel (task, TRUE);
+  task = ide_task_new (self, cancellable, callback, user_data);
+  ide_task_set_source_tag (task, ide_build_manager_execute_async);
+  ide_task_set_priority (task, G_PRIORITY_LOW);
+  ide_task_set_return_on_cancel (task, TRUE);
 
   if (self->pipeline == NULL ||
       self->can_build == FALSE ||
       !ide_build_pipeline_is_ready (self->pipeline))
     {
-      g_task_return_new_error (task,
-                               G_IO_ERROR,
-                               G_IO_ERROR_PENDING,
-                               "Cannot execute pipeline, it has not yet been prepared");
+      ide_task_return_new_error (task,
+                                 G_IO_ERROR,
+                                 G_IO_ERROR_PENDING,
+                                 "Cannot execute pipeline, it has not yet been prepared");
       IDE_EXIT;
     }
 
   if (!ide_build_pipeline_request_phase (self->pipeline, phase))
     {
-      g_task_return_boolean (task, TRUE);
+      ide_task_return_boolean (task, TRUE);
       IDE_EXIT;
     }
 
@@ -1376,9 +1377,9 @@ ide_build_manager_execute_finish (IdeBuildManager  *self,
   IDE_ENTRY;
 
   g_return_val_if_fail (IDE_IS_BUILD_MANAGER (self), FALSE);
-  g_return_val_if_fail (G_IS_TASK (result), FALSE);
+  g_return_val_if_fail (IDE_IS_TASK (result), FALSE);
 
-  ret = g_task_propagate_boolean (G_TASK (result), error);
+  ret = ide_task_propagate_boolean (IDE_TASK (result), error);
 
   IDE_RETURN (ret);
 }
@@ -1389,7 +1390,7 @@ ide_build_manager_clean_cb (GObject      *object,
                             gpointer      user_data)
 {
   IdeBuildPipeline *pipeline = (IdeBuildPipeline *)object;
-  g_autoptr(GTask) task = user_data;
+  g_autoptr(IdeTask) task = user_data;
   g_autoptr(GError) error = NULL;
   IdeBuildManager *self;
 
@@ -1397,15 +1398,15 @@ ide_build_manager_clean_cb (GObject      *object,
 
   g_assert (IDE_IS_BUILD_PIPELINE (pipeline));
   g_assert (G_IS_ASYNC_RESULT (result));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
 
-  self = g_task_get_source_object (task);
+  self = ide_task_get_source_object (task);
   g_assert (IDE_IS_BUILD_MANAGER (self));
 
   if (!ide_build_pipeline_clean_finish (pipeline, result, &error))
-    g_task_return_error (task, g_steal_pointer (&error));
+    ide_task_return_error (task, g_steal_pointer (&error));
   else
-    g_task_return_boolean (task, TRUE);
+    ide_task_return_boolean (task, TRUE);
 }
 
 /**
@@ -1429,7 +1430,7 @@ ide_build_manager_clean_async (IdeBuildManager     *self,
                                GAsyncReadyCallback  callback,
                                gpointer             user_data)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr(IdeTask) task = NULL;
 
   IDE_ENTRY;
 
@@ -1439,17 +1440,17 @@ ide_build_manager_clean_async (IdeBuildManager     *self,
 
   cancellable = dzl_cancellable_chain (cancellable, self->cancellable);
 
-  task = g_task_new (self, cancellable, callback, user_data);
-  g_task_set_source_tag (task, ide_build_manager_clean_async);
-  g_task_set_priority (task, G_PRIORITY_LOW);
-  g_task_set_return_on_cancel (task, TRUE);
+  task = ide_task_new (self, cancellable, callback, user_data);
+  ide_task_set_source_tag (task, ide_build_manager_clean_async);
+  ide_task_set_priority (task, G_PRIORITY_LOW);
+  ide_task_set_return_on_cancel (task, TRUE);
 
   if (self->pipeline == NULL)
     {
-      g_task_return_new_error (task,
-                               G_IO_ERROR,
-                               G_IO_ERROR_PENDING,
-                               "Cannot execute pipeline, it has not yet been prepared");
+      ide_task_return_new_error (task,
+                                 G_IO_ERROR,
+                                 G_IO_ERROR_PENDING,
+                                 "Cannot execute pipeline, it has not yet been prepared");
       IDE_EXIT;
     }
 
@@ -1492,9 +1493,9 @@ ide_build_manager_clean_finish (IdeBuildManager  *self,
   IDE_ENTRY;
 
   g_return_val_if_fail (IDE_IS_BUILD_MANAGER (self), FALSE);
-  g_return_val_if_fail (G_IS_TASK (result), FALSE);
+  g_return_val_if_fail (IDE_IS_TASK (result), FALSE);
 
-  ret = g_task_propagate_boolean (G_TASK (result), error);
+  ret = ide_task_propagate_boolean (IDE_TASK (result), error);
 
   IDE_RETURN (ret);
 }
@@ -1505,19 +1506,19 @@ ide_build_manager_rebuild_cb (GObject      *object,
                               gpointer      user_data)
 {
   IdeBuildPipeline *pipeline = (IdeBuildPipeline *)object;
-  g_autoptr(GTask) task = user_data;
+  g_autoptr(IdeTask) task = user_data;
   g_autoptr(GError) error = NULL;
 
   IDE_ENTRY;
 
   g_assert (IDE_IS_BUILD_PIPELINE (pipeline));
   g_assert (G_IS_ASYNC_RESULT (result));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
 
   if (!ide_build_pipeline_rebuild_finish (pipeline, result, &error))
-    g_task_return_error (task, g_steal_pointer (&error));
+    ide_task_return_error (task, g_steal_pointer (&error));
   else
-    g_task_return_boolean (task, TRUE);
+    ide_task_return_boolean (task, TRUE);
 
   IDE_EXIT;
 }
@@ -1545,7 +1546,7 @@ ide_build_manager_rebuild_async (IdeBuildManager     *self,
                                  GAsyncReadyCallback  callback,
                                  gpointer             user_data)
 {
-  g_autoptr(GTask) task = NULL;
+  g_autoptr(IdeTask) task = NULL;
 
   IDE_ENTRY;
 
@@ -1555,17 +1556,17 @@ ide_build_manager_rebuild_async (IdeBuildManager     *self,
 
   cancellable = dzl_cancellable_chain (cancellable, self->cancellable);
 
-  task = g_task_new (self, cancellable, callback, user_data);
-  g_task_set_source_tag (task, ide_build_manager_rebuild_async);
-  g_task_set_priority (task, G_PRIORITY_LOW);
-  g_task_set_return_on_cancel (task, TRUE);
+  task = ide_task_new (self, cancellable, callback, user_data);
+  ide_task_set_source_tag (task, ide_build_manager_rebuild_async);
+  ide_task_set_priority (task, G_PRIORITY_LOW);
+  ide_task_set_return_on_cancel (task, TRUE);
 
   if (self->pipeline == NULL)
     {
-      g_task_return_new_error (task,
-                               G_IO_ERROR,
-                               G_IO_ERROR_PENDING,
-                               "Cannot execute pipeline, it has not yet been prepared");
+      ide_task_return_new_error (task,
+                                 G_IO_ERROR,
+                                 G_IO_ERROR_PENDING,
+                                 "Cannot execute pipeline, it has not yet been prepared");
       IDE_EXIT;
     }
 
@@ -1600,9 +1601,9 @@ ide_build_manager_rebuild_finish (IdeBuildManager  *self,
   IDE_ENTRY;
 
   g_return_val_if_fail (IDE_IS_BUILD_MANAGER (self), FALSE);
-  g_return_val_if_fail (G_IS_TASK (result), FALSE);
+  g_return_val_if_fail (IDE_IS_TASK (result), FALSE);
 
-  ret = g_task_propagate_boolean (G_TASK (result), error);
+  ret = ide_task_propagate_boolean (IDE_TASK (result), error);
 
   IDE_RETURN (ret);
 }

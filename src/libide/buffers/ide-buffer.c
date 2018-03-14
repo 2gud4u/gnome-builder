@@ -50,6 +50,7 @@
 #include "util/ide-battery-monitor.h"
 #include "util/ide-gtk.h"
 #include "vcs/ide-vcs.h"
+#include "threading/ide-task.h"
 
 #define DEFAULT_DIAGNOSE_TIMEOUT_MSEC          333
 #define SETTLING_DELAY_MSEC                    333
@@ -2733,18 +2734,18 @@ ide_buffer_get_symbol_at_location_cb (GObject      *object,
 {
   IdeSymbolResolver *symbol_resolver = (IdeSymbolResolver *)object;
   g_autoptr(IdeSymbol) symbol = NULL;
-  g_autoptr(GTask) task = user_data;
+  g_autoptr(IdeTask) task = user_data;
   g_autoptr(GError) error = NULL;
   LookUpSymbolData *data;
 
   g_assert (IDE_IS_MAIN_THREAD ());
   g_assert (IDE_IS_SYMBOL_RESOLVER (symbol_resolver));
   g_assert (G_IS_ASYNC_RESULT (result));
-  g_assert (G_IS_TASK (task));
+  g_assert (IDE_IS_TASK (task));
 
   symbol = ide_symbol_resolver_lookup_symbol_finish (symbol_resolver, result, &error);
 
-  data = g_task_get_task_data (task);
+  data = ide_task_get_task_data (task);
   g_assert (data->resolvers != NULL);
   g_assert (data->resolvers->len > 0);
 
@@ -2772,7 +2773,7 @@ ide_buffer_get_symbol_at_location_cb (GObject      *object,
       GCancellable *cancellable;
 
       resolver = g_ptr_array_index (data->resolvers, data->resolvers->len - 1);
-      cancellable = g_task_get_cancellable (task);
+      cancellable = ide_task_get_cancellable (task);
 
       ide_symbol_resolver_lookup_symbol_async (resolver,
                                                data->location,
@@ -2782,16 +2783,16 @@ ide_buffer_get_symbol_at_location_cb (GObject      *object,
     }
   else if (data->symbol == NULL)
     {
-      g_task_return_new_error (task,
-                               G_IO_ERROR,
-                               G_IO_ERROR_NOT_FOUND,
-                               "Symbol not found");
+      ide_task_return_new_error (task,
+                                 G_IO_ERROR,
+                                 G_IO_ERROR_NOT_FOUND,
+                                 "Symbol not found");
     }
   else
     {
-      g_task_return_pointer (task,
-                             g_steal_pointer (&data->symbol),
-                             (GDestroyNotify)ide_symbol_unref);
+      ide_task_return_pointer (task,
+                               g_steal_pointer (&data->symbol),
+                               (GDestroyNotify)ide_symbol_unref);
     }
 }
 
@@ -2815,7 +2816,7 @@ ide_buffer_get_symbol_at_location_async (IdeBuffer           *self,
 {
   IdeBufferPrivate *priv = ide_buffer_get_instance_private (self);
   g_autoptr(IdeSourceLocation) srcloc = NULL;
-  g_autoptr(GTask) task = NULL;
+  g_autoptr(IdeTask) task = NULL;
   IdeExtensionSetAdapter *adapter;
   IdeSymbolResolver *resolver;
   LookUpSymbolData *data;
@@ -2832,16 +2833,16 @@ ide_buffer_get_symbol_at_location_async (IdeBuffer           *self,
   adapter = ide_buffer_get_symbol_resolvers (self);
   n_extensions = ide_extension_set_adapter_get_n_extensions (adapter);
 
-  task = g_task_new (self, cancellable, callback, user_data);
-  g_task_set_priority (task, G_PRIORITY_LOW);
-  g_task_set_source_tag (task, ide_buffer_get_symbol_at_location_async);
+  task = ide_task_new (self, cancellable, callback, user_data);
+  ide_task_set_priority (task, G_PRIORITY_LOW);
+  ide_task_set_source_tag (task, ide_buffer_get_symbol_at_location_async);
 
   if (n_extensions == 0)
     {
-      g_task_return_new_error (task,
-                               G_IO_ERROR,
-                               G_IO_ERROR_NOT_SUPPORTED,
-                               _("The current language lacks a symbol resolver."));
+      ide_task_return_new_error (task,
+                                 G_IO_ERROR,
+                                 G_IO_ERROR_NOT_SUPPORTED,
+                                 _("The current language lacks a symbol resolver."));
       return;
     }
 
@@ -2857,7 +2858,7 @@ ide_buffer_get_symbol_at_location_async (IdeBuffer           *self,
   ide_extension_set_adapter_foreach (adapter, lookup_symbol_get_extension, data);
   g_assert (data->resolvers->len > 0);
 
-  g_task_set_task_data (task, data, (GDestroyNotify)lookup_symbol_task_data_free);
+  ide_task_set_task_data (task, data, (GDestroyNotify)lookup_symbol_task_data_free);
 
   resolver = g_ptr_array_index (data->resolvers, data->resolvers->len - 1);
 
@@ -2886,9 +2887,9 @@ ide_buffer_get_symbol_at_location_finish (IdeBuffer     *self,
 {
   g_return_val_if_fail (IDE_IS_MAIN_THREAD (), NULL);
   g_return_val_if_fail (IDE_IS_BUFFER (self), NULL);
-  g_return_val_if_fail (G_IS_TASK (result), NULL);
+  g_return_val_if_fail (IDE_IS_TASK (result), NULL);
 
-  return g_task_propagate_pointer (G_TASK (result), error);
+  return ide_task_propagate_pointer (IDE_TASK (result), error);
 }
 
 /**
@@ -2905,9 +2906,9 @@ ide_buffer_get_symbols_finish (IdeBuffer     *self,
 {
   g_return_val_if_fail (IDE_IS_MAIN_THREAD (), NULL);
   g_return_val_if_fail (IDE_IS_BUFFER (self), NULL);
-  g_return_val_if_fail (G_IS_TASK (result), NULL);
+  g_return_val_if_fail (IDE_IS_TASK (result), NULL);
 
-  return g_task_propagate_pointer (G_TASK (result), error);
+  return ide_task_propagate_pointer (IDE_TASK (result), error);
 }
 
 static gboolean
@@ -3172,9 +3173,9 @@ ide_buffer_format_selection_cb (GObject      *object,
   g_autoptr(GError) error = NULL;
 
   if (!ide_formatter_format_finish (IDE_FORMATTER (object), result, &error))
-    g_task_return_error (user_data, g_steal_pointer (&error));
+    ide_task_return_error (user_data, g_steal_pointer (&error));
   else
-    g_task_return_boolean (user_data, TRUE);
+    ide_task_return_boolean (user_data, TRUE);
 }
 
 static void
@@ -3185,9 +3186,9 @@ ide_buffer_format_selection_range_cb (GObject      *object,
   g_autoptr(GError) error = NULL;
 
   if (!ide_formatter_format_range_finish (IDE_FORMATTER (object), result, &error))
-    g_task_return_error (user_data, g_steal_pointer (&error));
+    ide_task_return_error (user_data, g_steal_pointer (&error));
   else
-    g_task_return_boolean (user_data, TRUE);
+    ide_task_return_boolean (user_data, TRUE);
 }
 
 void
@@ -3198,7 +3199,7 @@ ide_buffer_format_selection_async (IdeBuffer           *self,
                                    gpointer             user_data)
 {
   IdeBufferPrivate *priv = ide_buffer_get_instance_private (self);
-  g_autoptr(GTask) task = NULL;
+  g_autoptr(IdeTask) task = NULL;
   IdeFormatter *formatter;
   GtkTextIter begin;
   GtkTextIter end;
@@ -3210,8 +3211,8 @@ ide_buffer_format_selection_async (IdeBuffer           *self,
   g_return_if_fail (IDE_IS_FORMATTER_OPTIONS (options));
   g_return_if_fail (!cancellable || G_IS_CANCELLABLE (cancellable));
 
-  task = g_task_new (self, cancellable, callback, user_data);
-  g_task_set_source_tag (task, ide_buffer_format_selection_async);
+  task = ide_task_new (self, cancellable, callback, user_data);
+  ide_task_set_source_tag (task, ide_buffer_format_selection_async);
 
   formatter = ide_extension_adapter_get_extension (priv->formatter_adapter);
 
@@ -3223,11 +3224,11 @@ ide_buffer_format_selection_async (IdeBuffer           *self,
       if (language != NULL)
         language_id = gtk_source_language_get_id (language);
 
-      g_task_return_new_error (task,
-                               G_IO_ERROR,
-                               G_IO_ERROR_NOT_SUPPORTED,
-                               "No formatter registered for language %s",
-                               language_id);
+      ide_task_return_new_error (task,
+                                 G_IO_ERROR,
+                                 G_IO_ERROR_NOT_SUPPORTED,
+                                 "No formatter registered for language %s",
+                                 language_id);
 
       IDE_EXIT;
     }
@@ -3268,9 +3269,9 @@ ide_buffer_format_selection_finish (IdeBuffer     *self,
 
   g_return_val_if_fail (IDE_IS_MAIN_THREAD (), FALSE);
   g_return_val_if_fail (IDE_IS_BUFFER (self), FALSE);
-  g_return_val_if_fail (G_IS_TASK (result), FALSE);
+  g_return_val_if_fail (IDE_IS_TASK (result), FALSE);
 
-  ret = g_task_propagate_boolean (G_TASK (result), error);
+  ret = ide_task_propagate_boolean (IDE_TASK (result), error);
 
   IDE_RETURN (ret);
 }
